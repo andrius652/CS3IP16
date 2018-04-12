@@ -1,571 +1,383 @@
+import tweepy
+import csv
+import nltk
+from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5 import QtCore
+from nltk.corpus import stopwords
+import string
+import threading
+from queue import Queue
+from time import sleep
+from multiprocessing import Process
+import multiprocessing as mp
+from unicodedata import normalize
 import sys
-from PyQt5.QtWidgets import *
-from PyQt5.QtGui import *
-from PyQt5.QtCore import *
-from PyQt5 import Qt, QtCore
-from tweet_access import *
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
-import dropbox
-import numpy as np
-from matplotlib.pyplot import bar
+import time
 
-
-# coding: utf-8
-
-class MatplotlibWidget(QWidget):
-
-    def __init__(self,parent=None):
-        super(MatplotlibWidget, self).__init__(parent)
-
-        self.figure = Figure()
-        self.canvas = FigureCanvasQTAgg(self.figure)
-
-
-        self.axis = self.figure.add_subplot(111)
-
-        self.axis.set_facecolor('None')
-
-        self.axis.spines['top'].set_color('#ffffff')
-        self.axis.spines['bottom'].set_color('#ffffff')
-        self.axis.spines['left'].set_color('#ffffff')
-        self.axis.spines['right'].set_color('#ffffff')
-        self.axis.set_ylabel("Amount")
-        self.axis.set_xlabel("Sentiment")
-        self.axis.tick_params(axis='x', colors='white')
-        self.axis.tick_params(axis='y', colors='white')
-
-        self.figure.set_size_inches(3,3)
-        self.figure.patch.set_facecolor('None')
-
-        self.layoutVertical = QVBoxLayout(self)  # QVBoxLayout
-        self.layoutVertical.addWidget(self.canvas)
-
-
-    def createGraph(self,sentiment):
-
-        self.axis.clear()
-
-        ind = np.arange(len(sentiment))
-
-        width = 0.35
-
-        self.axis.bar(ind - width / 2, sentiment, width, 0,  yerr=None, color='IndianRed', label='Positive')
-        self.axis.set_xticks(ind)
-        self.axis.set_xticklabels(('Positive', 'Neutral', 'Negative'))
-
-        self.axis.get_children()[0].set_color('#25d622')
-        self.axis.get_children()[1].set_color('#ff9933')
-        self.axis.get_children()[2].set_color('#ed172d')
-
-
-        self.figure.canvas.draw()
-
-
-
-
-
-
-
-
-class Gui(QWidget):
+class Miner:
 
     def __init__(self):
-        super().__init__()
+        self.amount_negative = 0
+        self.amount_positive = 0
+
+        self.stop_words = set(stopwords.words("english"))
+
+        self.probability = {}
+        self.local_probability = {}
+
+        self.openTrainingData()
+
+
+    def openTrainingData(self):
+
+        total_vocab = set()
+        amount_positive = 0
+        amount_neutral = 0
+        amount_negative = 0
+        allwords = []
+
+        with open("allwords.csv", 'r') as file:
+
+            reader = csv.reader(file)
+
+            for i in reader:
+
+                if i[1] is not '0':
+                    amount_positive = amount_positive + int(i[1])
+
+                if i[2] is not '0':
+                    amount_neutral = amount_neutral + int(i[2])
+
+                if i[3] is not '0':
+                    amount_negative = amount_negative + int(i[3])
+
+                allwords.append(i)
+                total_vocab.add(i[0])
+
+        pos_denominator = amount_positive + len(total_vocab)
+        neg_denominator = amount_negative + len(total_vocab)
+        neut_denominator = amount_neutral + len(total_vocab)
+
+        for i in allwords:
+            self.probability[i[0]] = (((float(i[1]) + 1) / pos_denominator, (float(i[2]) + 1) / neut_denominator,
+                                    (float(i[3]) + 1) / neg_denominator))
+
+            print(self.probability[i[0]])
+
+    # amount + 1 / amount_pos/amount_neg + total_vocab
+
+    def returnNouns(self, text):
+
+
+        tokenized = nltk.pos_tag(text)
+        nouns = []
+
+        for i in tokenized:
+
+            if i[1] == "NN" or i[1] == 'JJ':
+                #print(i)
+                nouns.append(i[0])
+
+        return nouns
+
+    def clear(self):
+        self.local_probability.clear()
+
+    def appendToLocal(self,tweet):
+
+        text1 = ""
+
+        for i in tweet:
+
+            if i not in string.punctuation and 'http' not in i:
+                text1 = text1 + i
+
+        text1 = nltk.word_tokenize(text1.lower())
+
+        for i in text1:
+
+            if i in self.local_probability:
+                pass
+
+            elif i in self.probability:
+
+                self.local_probability[i] = self.probability[i]
+
+    def preprocess(self, text): # returns sentiment and nouns/adjectives associated with the text
+
+        final_text = []
+        processed_tweets = set()
+
+        #print(text)
+
+        text1 = ""
+
+        for i in text:
+
+            if i not in string.punctuation:
+                text1 = text1 + i
+
+        #print(text1)
+
+
+        new_text = nltk.word_tokenize(text1.lower())
+
+
+        negative_prob = 0
+        neut_prob = 0
+        positive_prob = 0
+
+        for i in new_text:
+
+            if i not in self.stop_words and "http" not in i:
+                final_text.append(i)
+
+        #print(final_text)
+
+        nouns = self.returnNouns(final_text)
+
+        for i in final_text:
 
 
 
-        self.twitter = TweetAccess().authorise()
+            if i in self.probability:
 
-        dropbox_token = 'e9Q_YzfArDAAAAAAAAAACqgOYoDLYreyezRekkkpCHMXRTsG7PEQymGp4mUScmh8'
-        self.dbx = dropbox.Dropbox(dropbox_token)
+                positive_prob = positive_prob + float(self.probability[i][0])
+                neut_prob = neut_prob + float(self.probability[i][1])
+                negative_prob = negative_prob + float(self.probability[i][2])
 
-        trendingWords = []
-        trendingSentiment = ()
+        result = -1
 
-        self.dbx.files_download_to_file('trending.csv', '/' + 'TOP.csv')
-        self.dbx.files_download_to_file('trending_sentiment.csv', '/' + 'trending_sentiment.csv')
+        if negative_prob >= positive_prob and negative_prob >= neut_prob:
+            result = 0
 
-        with open('trending.csv','r') as f:
+        if positive_prob >= negative_prob and positive_prob >= neut_prob:
+            result = 1
+
+        if neut_prob >= negative_prob and neut_prob >= positive_prob:
+            result = 3
+
+
+        return result, nouns
+
+
+
+class TweetAccess:
+
+    def __init__(self):
+        self.twitter = self.authorise()
+        self.lastSearched = ""
+
+
+    def authorise(self):
+        __consumerKey = 'X7jKZPWi12FiIR6nt7QFG88cf'
+        __consumerSecret = 'y3oZpVLlAHgChkrUpfHVguWr1c1tbaFTQwfaIPBfLMw9XedNlj'
+        __accessToken = '921009992945291271-YWdzD48pwERRPwqukX4YJwVrkKiM3dO'
+        __accessSecret = '9eagISCFVzbmf7IBBUntbBVNlYxM5bYhBX7BgLRFfsS5U'
+
+        auth = tweepy.AppAuthHandler(__consumerKey, __consumerSecret)
+        #auth.set_access_token(__accessToken, __accessSecret)
+
+
+
+        return tweepy.API(auth)
+
+
+class TwitterThread(QThread):
+
+    updateText = pyqtSignal(str, int)
+    deactivateButton = pyqtSignal()
+    setProgress = pyqtSignal(float)
+    set_top_words = pyqtSignal(list,list)
+    set_tweets = pyqtSignal(list)
+
+    def __init__(self, twitter):
+        QtCore.QThread.__init__(self)
+        self.twitter = twitter
+        self.search = ""
+        self.pause = True
+        self.Miner = Miner()
+        self.topWords = []
+        self.tweets = []
+
+        self.countries = []
+        self.states = []
+        self.tweets = []
+
+
+        self.openLocations()
+
+
+
+    def setSearch(self, search):
+
+        self.search = search
+
+    def returnQueue(self):
+
+        return self.mainQueue
+
+    def setPause(self, flag):
+        self.pause = flag
+
+    def openLocations(self):
+
+        countries = open('countries.txt', 'r')
+
+        for i in countries:
+            i = str(i)
+            new = i.replace('\n', '')
+            new = new.strip()
+            self.countries.append(new)
+
+        for i in self.countries:
+            print(i)
+
+        with open('states.csv', 'r', errors='replace') as f:
 
             reader = csv.reader(f)
 
-            for words in reader:
+            for i in reader:
 
-                trendingWords.append((words[0],words[1]))
+                self.states.append(i)
 
-        with open('trending_sentiment.csv', 'r') as f:
+        for j in self.states:
+            print(j)
 
-            reader = csv.reader(f)
 
-            for words in reader:
-                trendingSentiment = (words[0],words[1],words[2])
-                print(trendingSentiment)
-
-        QToolTip.setFont(QFont('Calibri',12))  # set tool tip font
-        self.title = "TweetMan"  # set window title
-
-        img = QImage('bg.png')
-        palette = self.palette()
-        palette.setBrush(10, QBrush(img))
-        self.setPalette(palette)
-
-        # palette = self.palette()  # take palette of window
-        # palette.setColor(self.backgroundRole(), QColor(74,74,73))  # set palette colour
-        #self.setPalette(palette)  # set window palette
-        self.width = 1440
-        self.height = 775
-        self.posX = 2560 / 6
-        self.posY = 1600 / 5
-
-        self.currentTweets = []
-
-        self.lib = MatplotlibWidget(self)
-        self.lib.resize(380, 300)
-        self.lib.move(0, 69)
-
-        self.trending_graph = MatplotlibWidget(self)
-        self.trending_graph.resize(380, 300)
-        self.trending_graph.move(0, 420)
-        self.trending_graph.createGraph((trendingSentiment[0], trendingSentiment[1], trendingSentiment[2]))
-
-        #self.setWindowFlags(QtCore.Qt.FramelessWindowHint)
-
-
-        #  blue: R - 67 :: G - 147 :: B - 214
-
-        self.search_bar = QLineEdit(self)
-
-        self.button = QPushButton('Find', self)  # assign button
-        self.button.setToolTip("This is a <b>button</b> you sucker")  # set button tool tip
-        self.button.resize(self.button.sizeHint())  # resize button
-        self.button.setStyleSheet("""
-                .QPushButton {
-                    border: 4px solid rgb(67,147,214);
-                    border-radius: 10px;
-                    background-color: rgb(67,147,214);
-                    color: white;
-                    }
-                """)
-
-        self.progress = QProgressBar(self)
-        self.progress.resize(240,30)
-
-        self.positive = QPushButton('Positive', self)  # assign button
-        self.positive.resize(80,30)  # resize button
-        self.positive.setStyleSheet("""
-                        .QPushButton {
-                            border: 4px solid rgb(67,147,214);
-                            border-radius: 10px;
-                            background-color: rgb(67,147,214);
-                            color: white;
-
-                            }
-                        """)
-
-        self.negative = QPushButton('Negative', self)  # assign button
-        self.negative.resize(80,30)  # resize button
-        self.negative.setStyleSheet("""
-                                .QPushButton {
-                                    border: 4px solid rgb(67,147,214);
-                                    border-radius: 10px;
-                                    background-color: rgb(67,147,214);
-                                    color: white;
-
-                                    }
-                                """)
-
-        self.retrieve = QPushButton('Retrieve', self)  # assign button
-        self.retrieve.resize(80, 30)  # resize button
-        self.retrieve.setStyleSheet("""
-                                        .QPushButton {
-                                            border: 4px solid rgb(67,147,214);
-                                            border-radius: 10px;
-                                            background-color: rgb(67,147,214);
-                                            color: white;
-
-                                            }
-                                        """)
-
-        self.button.move(850, 4)  # move button to specific location
-        self.positive.move(15,100)
-        self.negative.move(15, 150)
-
-        self.positive.setVisible(False)
-        self.negative.setVisible(False)
-        self.retrieve.move(1075,470)
-
-        self.search_bar.resize(240, 30)  # search bar size, pos and style sheet
-        self.search_bar.move(250, 20)
-        self.search_bar.setText("")
-        self.search_bar.setStyleSheet("""
-        .QLineEdit {
-            border: 4px solid rgb(67,147,214);
-            border-radius: 10px;
-            background-color: rgb(74, 74, 73);
-            color: white;
-            
-            }
-        """)
-
-
-        self.tweetBox = QPlainTextEdit()
-        self.tweetBox.resize(660, 80)  # tweet box size, pos and style sheet
-        self.tweetBox.move(50, 50)
-        self.tweetBox.setStyleSheet("""
-                .QPlainTextEdit {
-                    border: 4px solid rgb(67,147,214);
-                    border-radius: 10px;
-                    background-color: rgb(74, 74, 73);
-                    color: rgb(255,255,255);
-                    }
-                """)
-
-        self.search_bar.setAttribute(QtCore.Qt.WA_MacShowFocusRect, 0)  # remove blue border
-        self.tweetBox.setAttribute(QtCore.Qt.WA_MacShowFocusRect, 0)
-
-        self.button.pressed.connect(lambda: self.button_print(self.button))  # actions upon button being clicked
-        self.button.released.connect(lambda: self.buttonReset(self.button))
-        self.retrieve.pressed.connect(lambda: self.displaySelected())
-        self.positive.pressed.connect(lambda: self.displayPositive())
-        self.negative.pressed.connect(lambda: self.displayNegative())
-
-
-
-        self.tweet_thread = TwitterThread(self.twitter)
-        self.tweet_thread.updateText.connect(self.add_tweet)
-        self.tweet_thread.deactivateButton.connect(self.enableButton)
-        self.tweet_thread.set_top_words.connect(self.set_top_words)
-        self.tweet_thread.set_tweets.connect(self.set_tweets)
-        self.tweet_thread.setProgress.connect(self.getProgress)
-        self.tweet_thread.start()
-
-
-
-        #####################################
-
-        self.scroll = QScrollArea(self)
-        #scroll.setFrameShape(QFrame.NoFrame)
-
-        self.scroll.resize(660,300)
-        self.scroll.move(365,80)
-        self.scroll.setWidgetResizable(True)  # CRITICAL
-
-        self.boxlay = QVBoxLayout()
-
-        self.inner = QFrame(self.scroll)
-        self.inner.setLayout(self.boxlay)
-
-        self.scroll.setWidget(self.inner)  # CRITICAL
-
-
-        ##########################################
-
-        self.listw = QListWidget(self)
-        self.listw.resize(660,300)
-        self.listw.move(365, 420)
-        self.listw.setStyleSheet("""
-                        .QListWidget {
-                            border: 4px solid rgb(67,147,214);
-                            border-radius: 10px;
-                            background-color: rgb(74, 74, 73);
-                            color: rgb(255,255,255);
-                            }
-                        """)
-
-        self.location_list = QListWidget(self)
-        self.location_list.resize(350, 300)
-        self.location_list.move(1050, 80)
-        self.location_list.setStyleSheet("""
-                                .QListWidget {
-                                    border: 4px solid rgb(67,147,214);
-                                    border-radius: 10px;
-                                    background-color: rgb(74, 74, 73);
-                                    color: rgb(255,255,255);
-                                    }
-                                """)
-
-        self.trending_list = QListWidget(self)
-        self.trending_list.resize(350, 300)
-        self.trending_list.move(1070, 460)
-        self.trending_list.setStyleSheet("""
-                                        .QListWidget {
-                                            border: 4px solid rgb(67,147,214);
-                                            border-radius: 10px;
-                                            background-color: rgb(74, 74, 73);
-                                            color: rgb(255,255,255);
-                                            }
-                                        """)
-
-        for words in trendingWords:
-
-            self.trending_list.addItem(words[0] + ", " + str(words[1]))
-
-        tweets = QLabel(self)
-        tweets.setText("Tweets")
-        tweets.setFont(QFont("Calibri", 24))
-        tweets.setStyleSheet("""
-                            .QLabel {
-                                color: rgb(255,255,255);
-                                }
-                            """)
-
-        location = QLabel(self)
-        location.setText("Tweet Locations")
-        location.setFont(QFont("Calibri", 24))
-        location.setStyleSheet("""
-                                    .QLabel {
-                                        color: rgb(255,255,255);
-                                        }
-                                    """)
-
-        trending = QLabel(self)
-        trending.setText("Trending Words")
-        trending.setFont(QFont("Calibri", 24))
-        trending.setStyleSheet("""
-                                            .QLabel {
-                                                color: rgb(255,255,255);
-                                                }
-                                            """)
-
-        top_words = QLabel(self)
-        top_words.setText("Top Words")
-        top_words.setFont(QFont("Calibri", 24))
-        top_words.setStyleSheet("""
-                                    .QLabel {
-                                        color: rgb(255,255,255);
-                                        }
-                                    """)
-
-        tweets.move(345,50)
-        location.move(1050,50)
-        trending.move(1070, 430)
-        top_words.move(345, 385)
-
-
-        self.tweets = {}
-
-        self.initUI()  # call initUI
-
-    def displaySelected(self):
-
-        for i in reversed(range(self.boxlay.count())):
-            self.boxlay.itemAt(i).widget().setParent(None)
-
-        sel = self.listw.selectedIndexes()[0]
-
-        word = str(sel.data())
-
-        word = word.split(",")
-
-        selected_word = word[0]
-
-        print(selected_word)
-
-        for tweet in self.tweets:
-
-            if selected_word in tweet[0].lower():
-                self.add_tweet(tweet[0], tweet[1])
-
-
-    def add_tweet(self, tweet, sentiment):
-
-        tweetBox = QPlainTextEdit()
-        tweetBox.setEnabled(False)
-
-        tweetBox.setPlainText(tweet)
-
-        #print(sentiment)
-
-
-        if sentiment == 1:
-
-            tweetBox.setStyleSheet("""
-                                   .QPlainTextEdit {
-                                       border: 2px solid rgb(37,214,34);
-                                       border-radius: 10px;
-                                       background-color: rgb(74, 74, 73);
-                                       color: rgb(255,255,255);
-                                       }
-                                   """)
-
-        if sentiment == 0:
-            tweetBox.setStyleSheet("""
-                                   .QPlainTextEdit {
-                                       border: 2px solid rgb(237,23,45);
-                                       border-radius: 10px;
-                                       background-color: rgb(74, 74, 73);
-                                       color: rgb(255,255,255);
-                                       }
-                                   """)
-
-        if sentiment == 3:
-            #print("NEUTRAL")
-            tweetBox.setStyleSheet("""
-                                   .QPlainTextEdit {
-                                       border: 2px solid rgb(255,153,51);
-                                       border-radius: 10px;
-                                       background-color: rgb(74, 74, 73);
-                                       color: rgb(255,255,255);
-                                       }
-                                   """)
-
-        self.inner.layout().addWidget(tweetBox)
-
-    def set_top_words(self, words, location):
-
-        for i in words:
-
-            self.listw.addItem(i[0] + ", " + str(i[1]))
-
-        for i in location:
-
-            self.location_list.addItem(i[0] + ", " + str(i[1]))
-
-    def displayPositive(self):
-
-        for i in reversed(range(self.boxlay.count())):
-            self.boxlay.itemAt(i).widget().setParent(None)
-
-        for tweet in self.pos_tweets:
-            self.add_tweet(tweet, True)
-
-    def displayNegative(self):
-
-        for i in reversed(range(self.boxlay.count())):
-            self.boxlay.itemAt(i).widget().setParent(None)
-
-        for tweet in self.neg_tweets:
-            self.add_tweet(tweet, False)
-
-    def set_tweets(self, tweets):
-
-        self.tweets = tweets
-
-        pos = 0
-        neut = 0
-        neg = 0
-
-        for i in range(0,300):
-            self.add_tweet(self.tweets[i][0], self.tweets[i][1])
-
-        for i in tweets:
-
-            if i[1] == 0:
-                neg = neg + 1
-
-            if i[1] == 1:
-                pos = pos + 1
-
-            if i[1] == 3:
-                neut = neut + 1
-
-        self.lib.createGraph((pos,neut,neg))
-
-
-
-    def enableButton(self):
-
-        self.button.setEnabled(True)
-
-    def initUI(self):  # create UI
-
-        self.setWindowTitle(self.title)
-        self.setGeometry(0, 0 , self.width, self.height)
-        self.center()
-        self.show()
-
-    def center(self):  # center window to computer screen
-
-        qr = self.frameGeometry()
-        cp = QDesktopWidget().availableGeometry().center()
-        qr.moveCenter(cp)
-
-        self.move(qr.topLeft())
-
-    def resizeEvent(self, event):  # on window resize
-
-        self.widgetCenter(self.search_bar, 4)
-        self.widgetCenter(self.progress, 30)
-        print(self.height)
-
-
-    def setButtonColor(self, button,  color):  # set button color
-
-        pal = button.palette()
-        pal.setColor(button.backgroundRole(), color)
-
-        return pal
-
-
-    def update(self):
-
+    def run(self):
 
         count = 0
 
-        while count < 900:
+        while True:
 
-            if len(self.currentTweets) > 0:
-                count = count + 1
-                #print(count)
+            self.sleep(1)
 
-    def button_print(self, button):  # button "print" actions
+            while self.pause is False:
 
-
-        for i in reversed(range(self.boxlay.count())):
-            self.boxlay.itemAt(i).widget().setParent(None)
+                locations = set()
+                tweets = []
 
 
-        self.tweetBox.clear()  # clear text box
-        self.tweets.clear()
-        self.listw.clear()
-        self.tweet_thread.setSearch(self.search_bar.text())
-        self.tweet_thread.setPause(False)
+                searchName = self.search + " -filter:retweets"
+
+                for tweet in tweepy.Cursor(self.twitter.search,
+                                           q=searchName,
+                                           count=100,
+                                           tweet_mode="extended",
+                                           result_type="recent",
+                                           include_entities=True,
+                                           lang="en").items(1000):
 
 
-        #thread = Thread(target=self.update)
-        #thread.start()
+                    val = ""
 
-        button.setStyleSheet("""
-                        .QPushButton {
-                            border: 4px solid rgb(67,147,214);
-                            border-radius: 10px;
-                            background-color: rgb(74,74,73);
-                            color: white;
-                            }
-                        """)
+                    val = val + tweet.full_text + "\n"
 
-    def buttonReset(self, button):  # after button has been clicked
+                    if (len(tweet.user.location) > 1):
+                        locations.add(tweet.user.location)
 
-       # print("Current Tweets: ", self.currentTweets)
+                    tweets.append(val)
 
-        button.setStyleSheet("""
-                                                .QPushButton {
-                                                       border: 4px solid rgb(67,147,214);
-                                                       border-radius: 10px;
-                                                       background-color: rgb(67,147,214);
-                                                       color: white;
-                                                       }
-                                                   """)
+                    #self.Miner.appendToLocal(val)
 
-        self.button.setEnabled(False)
+                    count = count + 1
+
+                    self.setProgress.emit((count/1000) * 100)
+
+                #print("finished")
+
+                ##############################################################
+                ##############################################################
+
+                start_time = time.time()
+
+                count = 0
+
+                for tweet in tweets:
+
+                    count = count + 1
+
+                    sentiment, nouns = self.Miner.preprocess(tweet)
+
+                    for word in nouns:
+                        self.topWords.append(word)
+
+                    if sentiment == 1:
+                        self.tweets.append((tweet, 1))
+
+                    if sentiment == 0:
+                        self.tweets.append((tweet, 0))
+
+                    if sentiment == 3:
+                        self.tweets.append((tweet,3))
+
+                    #self.updateText.emit(tweet,sentiment)
+
+                    print(count)
+
+                print("Program took: ", time.time() - start_time)
+
+                ###################################################################
+                ###################################################################
+                #self.Miner.printStats()
+                freq = nltk.FreqDist(self.topWords)
+                #print(freq.most_common(30))
+                self.setPause(True)
+                print("Finished acquiring tweets")
+                cnt_list = []
+                final_cnt = []
+
+                for i in locations:
+
+                    for j in self.countries:
+
+                        if j in i:
+                            if j == "USA" or j == 'America':
+                                cnt_list.append("United States")
+                                #print("United States")
+
+                            if j == "England" or j == "Wales" or j == "Scotland":
+                                #print("United Kingdom")
+                                cnt_list.append("United Kingdom")
+
+                            else:
+
+                                if j == "USA" or j == "America":
+                                    cnt_list.append("United States")
+                                else:
+                                   # print(j)
+                                    cnt_list.append(j)
+
+                    for j in self.states:
+
+                        if j[1] in i or j[0] in i:
+                            cnt_list.append("United States")
+
+                for i in self.countries:
+
+                    count = 0
+
+                    for j in cnt_list:
+
+                        if i == j:
+                            count = count + 1
+
+                    if count > 0:
+                        final_cnt.append((i, count))
+
+                final_cnt = sorted(final_cnt, key=lambda x: x[1], reverse=True)
+
+                self.deactivateButton.emit()
+                self.set_top_words.emit(freq.most_common(len(freq)), final_cnt)
+                self.set_tweets.emit(self.tweets)
+                self.topWords.clear()
+                self.tweets.clear()
+                self.Miner.clear()
 
 
 
 
-    def widgetCenter(self, widget, y):  # center widget to window
-
-        gm = self.frameGeometry()
-
-        widget.move((gm.width()/2) - (widget.width()/2), y)
-
-
-    def getProgress(self, percent):
-
-        #print("dehello")
-
-        self.progress.setValue(percent)
-
-
+        print("Terminating Thread")
 
 
