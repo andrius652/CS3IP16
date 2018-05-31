@@ -170,10 +170,10 @@ class TweetAccess:
 
 
     def authorise(self):
-        __consumerKey = 'X7jKZPWi12FiIR6nt7QFG88cf'
-        __consumerSecret = 'y3oZpVLlAHgChkrUpfHVguWr1c1tbaFTQwfaIPBfLMw9XedNlj'
-        __accessToken = '921009992945291271-YWdzD48pwERRPwqukX4YJwVrkKiM3dO'
-        __accessSecret = '9eagISCFVzbmf7IBBUntbBVNlYxM5bYhBX7BgLRFfsS5U'
+        __consumerKey = 
+        __consumerSecret = 
+        __accessToken = 
+        __accessSecret = 
 
         auth = tweepy.AppAuthHandler(__consumerKey, __consumerSecret)
         #auth.set_access_token(__accessToken, __accessSecret)
